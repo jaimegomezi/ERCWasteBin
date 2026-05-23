@@ -2,22 +2,26 @@ import cv2
 import torch
 from torchvision import transforms, models
 from PIL import Image
-import numpy as np
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MODEL_PATH = PROJECT_ROOT / "dataset" / "model" / "waste_model_1.pth"
 CLASSES = ["compost", "recycle", "trash"]
 
 # load model
 model = models.mobilenet_v2()
-model.classifier[1] = torch.nn.Linear(model.last_channel, 3)
-model.load_state_dict(torch.load("waste_model_1.pth", map_location="cpu"))
+model.classifier[1] = torch.nn.Linear(model.last_channel, len(CLASSES))
+model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
 model.eval()
 
 transform = transforms.Compose([
-    transforms.Resize((224,224)),
+    transforms.Resize((224, 224)),
     transforms.ToTensor()
 ])
 
 cap = cv2.VideoCapture(1)
+if not cap.isOpened():
+    raise RuntimeError("Could not open camera index 1. Try changing cv2.VideoCapture(1) to 0.")
 
 print("Press SPACE to take photo, Q to quit")
 
@@ -42,7 +46,7 @@ while True:
 
         print("\nPrediction:", CLASSES[pred])
         for i, cls in enumerate(CLASSES):
-            print(f"  {cls}: {probs[i]*100:.2f}%")
+            print(f"  {cls}: {probs[i] * 100:.2f}%")
 
     # Q = quit
     if key == ord("q"):

@@ -1,6 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
 dataset/train/
 dataset/test/
 dataset/train.py
 
-__pycache__/
-*.pyc
+# Keep generated outputs and large experiments local.
+outputs/
+checkpoints/
