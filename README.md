@@ -16,7 +16,7 @@ The Arduino receives the command and tells the motor which position to turn to s
 
 ## Development Note
 
-This project was developed over several months with most testing and iteration done locally before the repository was organized. Because of that, the Git commit history does not show every experiment, or model training attempt. The current repository is organized to make future club contributions easier.
+This project was developed over several months with most testing and iteration done locally before the repository was organized. Because of that, the Git commit history does not show every experiment or model training attempt. The current repository is organized to make future club contributions easier.
 
 ## Repository Layout
 
@@ -25,18 +25,22 @@ This project was developed over several months with most testing and iteration d
 ├── dataset/
 │   ├── model/
 │   │   └── waste_model_1.pth   # Trained model weights
-│   └── sample/
-│       ├── IMG_6456.jpeg       # Sample image
-│       ├── IMG_6457.jpeg       # Sample image
-│       └── IMG_6458.jpeg       # Sample image
+│   ├── sample/
+│   │   ├── IMG_6456.jpeg       # Sample image
+│   │   ├── IMG_6457.jpeg       # Sample image
+│   │   └── IMG_6458.jpeg       # Sample image
+│   ├── test.zip                # Test dataset archive
+│   └── train.zip               # Training dataset archive
 ├── docs/
 │   └── CONTRIBUTING.md         # Contributor workflow and project rules
 ├── arduino/
-│   └── waste_sorter/
-│       └── waste_sorter.ino    # Stepper motor control sketch
+│   └── waste_sorter.ino        # Stepper motor control sketch
+├── raspberry_pi/
+│   └── main.py                 # Raspberry Pi runtime script
 ├── scripts/
-│   ├── snapshot.py             # Webcam classifier
-│   └── test.py                 # Image classifier
+│   ├── sample_img_test.py      # Test model on sample images
+│   ├── train.py                # Train a model
+│   └── webcam_test.py          # Test model with a webcam
 └── requirements.txt
 ```
 
@@ -60,7 +64,7 @@ pip install -r requirements.txt
 Use the included sample images:
 
 ```bash
-python3 scripts/test.py
+python3 scripts/sample_img_test.py
 ```
 
 ## Run Webcam Predictions
@@ -68,17 +72,47 @@ python3 scripts/test.py
 Open the webcam preview:
 
 ```bash
-python3 scripts/snapshot.py
+python3 scripts/webcam_test.py
 ```
 
 Press `SPACE` to classify the current frame. Press `Q` to quit.
+
+## Training and Dataset Archives
+
+The full training and test folders are stored as zip files:
+
+```text
+dataset/train.zip
+dataset/test.zip
+```
+
+Unzip them before running training or dataset tests again:
+
+```bash
+unzip dataset/train.zip -d dataset/
+unzip dataset/test.zip -d dataset/
+```
+
+Then run the training script:
+
+```bash
+python3 scripts/train.py
+```
+
+## Raspberry Pi Runtime
+
+The Raspberry Pi script is:
+
+```bash
+python3 raspberry_pi/main.py
+```
 
 ## Arduino Motor Control
 
 The Arduino sketch is in:
 
 ```text
-arduino/waste_sorter/waste_sorter.ino
+arduino/waste_sorter.ino
 ```
 
 It listens over serial at `9600` baud:
