@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping maintain this club project. Keep changes small, documented, and easy for the next person to run.
+Thanks for helping maintain this club project.
 
 ## Development Setup
 
