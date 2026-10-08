@@ -2,3 +2,5 @@ torch
 torchvision
 Pillow
 opencv-python
+pyserial
+gpiod>=2.0
