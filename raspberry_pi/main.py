@@ -1,32 +1,103 @@
-# THERE ARE SOME CHANGES THAT ARE NOT REFLECTED IN THIS FILE. PLEASE CHECK THE PI DIRECTORY FOR THE MOST UP-TO-DATE CODE.
+"""
+ERC Waste Sorter - Raspberry Pi runtime
 
+Waits for the IR sensor to see an item on the lid, takes a photo, classifies it
+with the MobileNetV2 model, and tells the Arduino which section to rotate to.
+
+Arduino protocol (auto_trashcan.ino, 9600 baud):
+    '1' = Trash   '2' = Recycling   '3' = Compost
+The Arduino prints "Done." after it has rotated, dumped the item and closed
+the lid. This script waits for that before looking for the next item.
+"""
+
+import glob
 import os
+import sys
 import time
+from pathlib import Path
+
 import cv2
-import torch
-import serial
 import gpiod
-from gpiod.line import Direction
-from torchvision import transforms, models
+import serial
+import torch
+from gpiod.line import Direction, Value
 from PIL import Image
+from torchvision import models, transforms
 
-MODEL_PATH = os.path.expanduser("~/waste-env/waste_model_1.pth")
-CLASSES = ["compost", "recycle", "trash"]
-IR_SENSOR_PIN = 17
-CAPTURE_DELAY = 0.5       # wait for object to settle before taking pic
-COOLDOWN = 2.0             # wait between detections so it doesn't spam
+# ---------------- Settings you may need to change ----------------
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MODEL_PATH = PROJECT_ROOT / "dataset" / "model" / "waste_model_1.pth"
 
-# connect to arduino over usb serial
-arduino = serial.Serial('/dev/ttyACM0', 9600, timeout=1)
-time.sleep(2)  # give arduino time to reset
+CLASSES = ["compost", "recycle", "trash"]   # must match the order used in training
 
-# image preprocessing
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-])
+# What byte to send the Arduino for each class. Matches auto_trashcan.ino.
+ARDUINO_COMMAND = {
+    "trash":   b"1",
+    "recycle": b"2",
+    "compost": b"3",
+}
 
-# load the trained model
+SERIAL_PORT = None          # None = auto-detect (/dev/ttyACM0 or /dev/ttyUSB0)
+BAUD = 9600
+
+IR_SENSOR_PIN = 17          # BCM numbering (physical pin 11)
+# Most IR obstacle modules pull the output LOW when they see something.
+# If the script triggers constantly with nothing there, flip this to False.
+IR_ACTIVE_LOW = True
+
+CAMERA_INDEX = 0
+CAPTURE_DELAY = 0.5         # let the item settle before the photo (s)
+MIN_CONFIDENCE = 0.50       # below this, play it safe and send to trash
+ARDUINO_TIMEOUT = 20.0      # max seconds to wait for the Arduino's "Done."
+COOLDOWN = 1.0              # pause after each item (s)
+# ------------------------------------------------------------------
+
+
+def find_serial_port():
+    if SERIAL_PORT:
+        return SERIAL_PORT
+    ports = sorted(glob.glob("/dev/ttyACM*")) + sorted(glob.glob("/dev/ttyUSB*"))
+    if not ports:
+        sys.exit("ERROR: No Arduino found. Is the USB cable plugged into the Pi?")
+    return ports[0]
+
+
+def find_gpio_chip():
+    """Pi 4 and newer Pi 5 kernels use gpiochip0; older Pi 5 kernels use
+    gpiochip4. Pick whichever chip drives the 40-pin header."""
+    for path in sorted(glob.glob("/dev/gpiochip*")):
+        try:
+            with gpiod.Chip(path) as chip:
+                label = chip.get_info().label
+        except OSError:
+            continue
+        if label.startswith("pinctrl-rp1") or label.startswith("pinctrl-bcm2"):
+            return path
+    return "/dev/gpiochip0"
+
+
+def wait_for_line(ser, text, timeout):
+    """Read lines from the Arduino until one contains `text`."""
+    end = time.time() + timeout
+    while time.time() < end:
+        line = ser.readline().decode(errors="ignore").strip()
+        if line:
+            print(f"  [arduino] {line}")
+            if text in line:
+                return True
+    return False
+
+
+def grab_fresh_frame(cap):
+    """OpenCV keeps a few old frames buffered; throw them away so the photo
+    shows what's on the lid right now, not what was there seconds ago."""
+    for _ in range(5):
+        cap.grab()
+    ok, frame = cap.read()
+    return frame if ok else None
+
+
+# ---------------- Startup ----------------
 print("Loading model...")
 model = models.mobilenet_v2()
 model.classifier[1] = torch.nn.Linear(model.last_channel, len(CLASSES))
@@ -34,58 +105,72 @@ model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu", weights_only=Tr
 model.eval()
 print("Model loaded.")
 
-# set up the IR sensor on GPIO 17
-request = gpiod.request_lines(
-    "/dev/gpiochip4",
-    consumer="waste-sorter",
-    config={IR_SENSOR_PIN: gpiod.LineSettings(direction=Direction.INPUT)}
-)
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+])
+
 
 def classify_frame(frame):
-    """take a camera frame, run it through the model, return the label and confidence"""
     img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     tensor = transform(img).unsqueeze(0)
     with torch.no_grad():
-        out = model(tensor)
-        probs = torch.softmax(out, dim=1)[0]
-        pred = probs.argmax().item()
+        probs = torch.softmax(model(tensor), dim=1)[0]
+    pred = probs.argmax().item()
     return CLASSES[pred], probs[pred].item()
 
-# open webcam
-cap = cv2.VideoCapture(0)
+
+port = find_serial_port()
+print(f"Connecting to Arduino on {port}...")
+arduino = serial.Serial(port, BAUD, timeout=1)
+# Opening the port resets the Arduino; wait for its "Ready." banner.
+if not wait_for_line(arduino, "Ready", timeout=5):
+    print("  (no Ready message - continuing anyway)")
+arduino.reset_input_buffer()
+
+chip_path = find_gpio_chip()
+gpio = gpiod.request_lines(
+    chip_path,
+    consumer="waste-sorter",
+    config={IR_SENSOR_PIN: gpiod.LineSettings(direction=Direction.INPUT,
+                                               active_low=IR_ACTIVE_LOW)},
+)
+
+cap = cv2.VideoCapture(CAMERA_INDEX)
 if not cap.isOpened():
-    print("ERROR: Cannot open camera")
-    exit(1)
+    sys.exit(f"ERROR: Cannot open camera {CAMERA_INDEX}. Try CAMERA_INDEX = 1.")
 
 print("System ready. Waiting for waste...")
 
+# ---------------- Main loop ----------------
 try:
     while True:
-        # check if something is in front of the IR sensor
-        if request.get_value(IR_SENSOR_PIN) == gpiod.line.Value.ACTIVE:
-            print("Object detected!")
-            time.sleep(CAPTURE_DELAY)
+        if gpio.get_value(IR_SENSOR_PIN) != Value.ACTIVE:
+            time.sleep(0.05)
+            continue
 
-            ret, frame = cap.read()
-            if not ret:
-                print("Camera capture failed")
-                continue
+        print("Object detected!")
+        time.sleep(CAPTURE_DELAY)
 
-            label, confidence = classify_frame(frame)
-            print(f"  -> {label} ({confidence*100:.1f}%)")
+        frame = grab_fresh_frame(cap)
+        if frame is None:
+            print("  Camera capture failed")
+            continue
 
-            # tell the arduino which bin to rotate to
-            if label == "compost":
-                arduino.write(b'1')
-            elif label == "recycle":
-                arduino.write(b'2')
-            elif label == "trash":
-                arduino.write(b'3')
+        label, confidence = classify_frame(frame)
+        print(f"  -> {label} ({confidence * 100:.1f}%)")
+        if confidence < MIN_CONFIDENCE:
+            print(f"  -> Not sure, sending to trash")
+            label = "trash"
 
-            print(f"  -> Sent '{label}' command to Arduino")
-            time.sleep(COOLDOWN)
+        arduino.reset_input_buffer()
+        arduino.write(ARDUINO_COMMAND[label])
+        print(f"  -> Sent '{label}' to Arduino, waiting for it to finish...")
 
-        time.sleep(0.05)
+        if not wait_for_line(arduino, "Done", timeout=ARDUINO_TIMEOUT):
+            print("  WARNING: Arduino never said Done. Check wiring/power.")
+
+        time.sleep(COOLDOWN)
 
 except KeyboardInterrupt:
     print("Shutting down...")
@@ -93,5 +178,5 @@ except KeyboardInterrupt:
 finally:
     cap.release()
     arduino.close()
-    request.release()
+    gpio.release()
     print("Cleanup complete.")

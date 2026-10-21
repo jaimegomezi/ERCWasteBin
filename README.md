@@ -8,9 +8,11 @@ My part of the project was to create a computer vision system that classifies wa
 
 The overall project sorts waste into the correct chute bins, which are placed at different angles. The computer vision system runs on a Raspberry Pi, where it uses the trained model to classify the waste item. After classification, the Raspberry Pi sends a command to the Arduino:
 
-- `1` for compost
+- `1` for trash
 - `2` for recycle
-- `3` for trash
+- `3` for compost
+
+It then waits for the Arduino to reply `Done.` before looking for the next item.
 
 The Arduino receives the command and tells the motor which position to turn to so the waste goes into the correct bin.
 
@@ -32,9 +34,11 @@ This project was developed over several months with most testing and iteration d
 │   ├── test.zip                # Test dataset archive
 │   └── train.zip               # Training dataset archive
 ├── docs/
-│   └── CONTRIBUTING.md         # Contributor workflow and project rules
+│   ├── CONTRIBUTING.md         # Contributor workflow and project rules
+│   └── SETUP_PI.md             # First-time Raspberry Pi setup
 ├── arduino/
-│   └── waste_sorter.ino        # Stepper motor control sketch
+│   └── auto_trashcan/
+│       └── auto_trashcan.ino   # Turntable stepper + lid servo sketch
 ├── raspberry_pi/
 │   └── main.py                 # Raspberry Pi runtime script
 ├── scripts/
@@ -101,7 +105,7 @@ python3 scripts/train.py
 
 ## Raspberry Pi Runtime
 
-The Raspberry Pi script is:
+First-time setup is in [docs/SETUP_PI.md](docs/SETUP_PI.md). The Raspberry Pi script is:
 
 ```bash
 python3 raspberry_pi/main.py
@@ -112,14 +116,16 @@ python3 raspberry_pi/main.py
 The Arduino sketch is in:
 
 ```text
-arduino/waste_sorter.ino
+arduino/auto_trashcan/auto_trashcan.ino
 ```
 
 It listens over serial at `9600` baud:
 
-- `1` moves to the compost bin
-- `2` moves to the recycle bin
-- `3` moves to the trash bin
+- `1` moves to the trash section
+- `2` moves to the recycle section
+- `3` moves to the compost section
+
+After rotating, it opens the lid, closes it, and prints `Done.`
 
 ## Contributing
 
